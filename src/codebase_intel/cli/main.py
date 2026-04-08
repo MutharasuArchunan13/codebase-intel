@@ -429,6 +429,93 @@ async def _detect_patterns_async(project_root: Path, save: bool) -> None:
 
 
 # -------------------------------------------------------------------
+# crossrepo
+# -------------------------------------------------------------------
+
+
+@app.command(name="crossrepo")
+def crossrepo(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(help="Paths to service repos (space-separated)"),
+    ],
+    impact: str = typer.Option("", "--impact", "-i", help="Service ID to check impact for"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Scan multiple repos and map cross-service dependencies."""
+    _setup_logging(verbose)
+
+    from codebase_intel.crossrepo.registry import CrossRepoRegistry
+
+    registry_dir = paths[0].resolve().parent / ".codebase-intel-crossrepo"
+    registry = CrossRepoRegistry(registry_dir)
+
+    # Scan all services
+    for repo_path in paths:
+        resolved = repo_path.resolve()
+        if not resolved.is_dir():
+            console.print(f"[red]Not a directory: {resolved}[/red]")
+            continue
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Scanning {resolved.name}...", total=None)
+            result = registry.register_service(resolved)
+            progress.update(task, description=f"Done: {result.to_dict()['endpoints']} endpoints", completed=True)
+
+    # Resolve dependencies
+    console.print()
+    deps = registry.resolve_dependencies()
+    console.print(f"[green]Resolved {len(deps)} cross-service dependencies[/green]")
+
+    # Show service map
+    service_map = registry.get_service_map()
+    table = Table(title="Service Dependency Map")
+    table.add_column("Service", style="bold")
+    table.add_column("Endpoints", justify="right")
+    table.add_column("Outbound Calls", justify="right")
+    table.add_column("Depends On", style="cyan")
+    table.add_column("Depended On By", style="yellow")
+
+    for sid, info in service_map.items():
+        table.add_row(
+            sid,
+            str(info["endpoints_exposed"]),
+            str(info["outbound_calls"]),
+            ", ".join(info["depends_on"]) or "—",
+            ", ".join(info["depended_on_by"]) or "—",
+        )
+    console.print(table)
+
+    # Impact analysis if requested
+    if impact:
+        impacts = registry.impact_analysis(impact)
+        if impacts:
+            console.print()
+            for imp in impacts:
+                risk_color = {"critical": "bold red", "high": "red", "medium": "yellow", "low": "green"}.get(imp.risk_level, "white")
+                console.print(Panel(
+                    f"Endpoint: [bold]{imp.changed_endpoint}[/bold]\n"
+                    f"Risk: [{risk_color}]{imp.risk_level.upper()}[/{risk_color}] — "
+                    f"{imp.affected_count} services affected\n\n"
+                    f"{imp.recommendation}",
+                    title=f"Impact: {impact}",
+                ))
+                for dep in imp.affected_services:
+                    critical = " [red][CRITICAL][/red]" if dep.is_critical else ""
+                    console.print(f"  → {dep.consumer_service}{critical} at {dep.file_path}:{dep.line_number or '?'}")
+        else:
+            console.print(f"[green]No cross-service impact found for {impact}[/green]")
+
+    # Save registry
+    saved = registry.save()
+    console.print(f"\n[dim]Registry saved to {saved}[/dim]")
+
+
+# -------------------------------------------------------------------
 # serve
 # -------------------------------------------------------------------
 
