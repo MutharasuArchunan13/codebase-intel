@@ -5,7 +5,7 @@ on:
     types: [published]
 
 permissions:
-  id-token: write  # Required for trusted publishing
+  id-token: write
 
 jobs:
   publish:
@@ -16,5 +16,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+      - run: uv python install 3.12
       - run: uv build
-      - run: uv publish --trusted-publishing always
+      - name: Publish to PyPI
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
