@@ -447,6 +447,104 @@ def serve(
 
 
 # -------------------------------------------------------------------
+# intent
+# -------------------------------------------------------------------
+
+
+@app.command()
+def intent(
+    path: Annotated[Path, typer.Argument(help="Project root")] = Path("."),
+    verify: bool = typer.Option(False, "--verify", "-v", help="Run verification on all active intents"),
+) -> None:
+    """Show and verify tracked intents — what was requested vs what's delivered."""
+    asyncio.run(_intent_async(path.resolve(), verify))
+
+
+async def _intent_async(project_root: Path, verify: bool) -> None:
+    from codebase_intel.intent.store import IntentStore
+    from codebase_intel.intent.verifier import IntentVerifier
+
+    intents_dir = project_root / ".codebase-intel" / "intents"
+    store = IntentStore(intents_dir)
+    all_intents = store.load_all()
+
+    if not all_intents:
+        console.print("[yellow]No intents tracked yet.[/yellow]")
+        console.print("Use the MCP tool `set_intent` to capture goals with acceptance criteria.")
+        return
+
+    if verify:
+        verifier = IntentVerifier(project_root)
+        console.print()
+
+        for intent_obj in all_intents:
+            if intent_obj.status.value not in ("active", "partial"):
+                continue
+
+            report = await verifier.verify(intent_obj)
+
+            # Update stored state
+            updated_criteria = []
+            for r in report.results:
+                updated_criteria.append(r.criterion.model_copy(update={
+                    "verified": r.passed,
+                    "failure_reason": r.failure_reason,
+                }))
+            store.update_criteria(intent_obj.id, updated_criteria)
+            store.update_status(intent_obj.id, report.status)
+
+            # Display
+            status_color = {
+                "verified": "green",
+                "partial": "yellow",
+                "failed": "red",
+                "active": "cyan",
+            }.get(report.status.value, "white")
+
+            console.print(Panel(
+                f"[bold]{intent_obj.title}[/bold]\n"
+                f"Status: [{status_color}]{report.status.value.upper()}[/{status_color}] — "
+                f"{report.passed_count}/{report.total} criteria met",
+                title=f"Intent {intent_obj.id}",
+            ))
+
+            for r in report.results:
+                icon = "[green]PASS[/green]" if r.passed else "[red]FAIL[/red]"
+                console.print(f"  {icon} {r.criterion.description}")
+                if r.failure_reason:
+                    console.print(f"       [dim]{r.failure_reason}[/dim]")
+            console.print()
+
+    else:
+        # Just show status
+        table = Table(title="Tracked Intents")
+        table.add_column("ID", style="dim")
+        table.add_column("Title", style="bold")
+        table.add_column("Status")
+        table.add_column("Progress", justify="right")
+        table.add_column("Gaps", justify="right", style="red")
+
+        for i in all_intents:
+            status_color = {
+                "verified": "green",
+                "partial": "yellow",
+                "failed": "red",
+                "active": "cyan",
+                "abandoned": "dim",
+            }.get(i.status.value, "white")
+
+            table.add_row(
+                i.id,
+                i.title[:50],
+                f"[{status_color}]{i.status.value}[/{status_color}]",
+                f"{i.criteria_met}/{i.criteria_total} ({i.completion_pct:.0f}%)",
+                str(len(i.gaps)),
+            )
+        console.print(table)
+        console.print("\nRun with `--verify` to check all criteria against the actual codebase.")
+
+
+# -------------------------------------------------------------------
 # status
 # -------------------------------------------------------------------
 

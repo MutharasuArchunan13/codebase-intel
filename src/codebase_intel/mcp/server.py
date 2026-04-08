@@ -141,6 +141,16 @@ def create_server(project_root: Path | None = None) -> Server:
         except Exception:
             _state["feedback_available"] = False
 
+        # Initialize intent store
+        try:
+            from codebase_intel.intent.store import IntentStore
+
+            intents_dir = config.project_root / ".codebase-intel" / "intents"
+            _state["intent_store"] = IntentStore(intents_dir)
+            _state["intent_available"] = True
+        except Exception:
+            _state["intent_available"] = False
+
         _state["initialized"] = True
         return _state
 
@@ -374,6 +384,89 @@ def create_server(project_root: Path | None = None) -> Server:
                     },
                 },
             ),
+            Tool(
+                name="set_intent",
+                description=(
+                    "Capture what the user wants with verifiable acceptance criteria. "
+                    "Call this at the START of a task to record the goal. Each criterion "
+                    "is machine-checkable — the system will verify if you actually delivered."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "One-line summary of what the user wants",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Detailed description of the goal",
+                        },
+                        "criteria": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "description": {"type": "string"},
+                                    "criterion_type": {
+                                        "type": "string",
+                                        "enum": [
+                                            "file_exists", "file_contains", "function_exists",
+                                            "wired", "cli_works", "mcp_tool_exists",
+                                            "grep_match", "grep_no_match", "test_passes",
+                                            "manual", "custom",
+                                        ],
+                                    },
+                                    "check_value": {"type": "string"},
+                                },
+                                "required": ["description", "criterion_type", "check_value"],
+                            },
+                            "description": "Verifiable acceptance criteria",
+                        },
+                        "priority": {
+                            "type": "integer",
+                            "description": "1=highest, 5=lowest (default: 1)",
+                            "default": 1,
+                        },
+                    },
+                    "required": ["title", "criteria"],
+                },
+            ),
+            Tool(
+                name="check_intent",
+                description=(
+                    "Verify whether an intent's acceptance criteria are actually met. "
+                    "Call this BEFORE marking work as done. It runs automated checks "
+                    "and tells you exactly what passed and what failed."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "intent_id": {
+                            "type": "string",
+                            "description": "Intent ID to verify (e.g., 'INT-001'). Omit to check all active intents.",
+                        },
+                    },
+                },
+            ),
+            Tool(
+                name="list_intents",
+                description=(
+                    "List all tracked intents with their completion status. "
+                    "Shows what the user wants and how much has been delivered."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "status_filter": {
+                            "type": "string",
+                            "enum": ["active", "verified", "partial", "failed", "all"],
+                            "description": "Filter by status (default: all)",
+                            "default": "all",
+                        },
+                    },
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -413,6 +506,12 @@ def create_server(project_root: Path | None = None) -> Server:
                 result = await _handle_record_feedback(state, arguments)
             elif name == "get_efficiency_report":
                 result = await _handle_efficiency_report(state, arguments)
+            elif name == "set_intent":
+                result = await _handle_set_intent(state, arguments)
+            elif name == "check_intent":
+                result = await _handle_check_intent(state, arguments)
+            elif name == "list_intents":
+                result = await _handle_list_intents(state, arguments)
             else:
                 result = {"error": f"Unknown tool: {name}"}
         except Exception as exc:
@@ -904,6 +1003,152 @@ def create_server(project_root: Path | None = None) -> Server:
         }
 
         return report
+
+    async def _handle_set_intent(
+        state: dict[str, Any], args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Capture a user's intent with verifiable acceptance criteria."""
+        intent_store = state.get("intent_store")
+        if not intent_store:
+            return {"error": "Intent tracking not available"}
+
+        from codebase_intel.intent.models import AcceptanceCriterion, CriterionType, Intent
+
+        intent_id = intent_store.next_id()
+
+        criteria = []
+        for c in args.get("criteria", []):
+            criteria.append(AcceptanceCriterion(
+                description=c["description"],
+                criterion_type=CriterionType(c["criterion_type"]),
+                check_value=c["check_value"],
+            ))
+
+        intent = Intent(
+            id=intent_id,
+            title=args["title"],
+            description=args.get("description", ""),
+            priority=args.get("priority", 1),
+            criteria=criteria,
+            tags=args.get("tags", []),
+        )
+
+        intent_store.save(intent)
+
+        return {
+            "intent_id": intent_id,
+            "title": intent.title,
+            "criteria_count": len(criteria),
+            "message": (
+                f"Intent {intent_id} captured with {len(criteria)} acceptance criteria. "
+                f"Call check_intent when you think you're done — it will verify everything."
+            ),
+            "criteria": [
+                {"description": c.description, "type": c.criterion_type.value}
+                for c in criteria
+            ],
+        }
+
+    async def _handle_check_intent(
+        state: dict[str, Any], args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Verify whether acceptance criteria are actually met."""
+        intent_store = state.get("intent_store")
+        if not intent_store:
+            return {"error": "Intent tracking not available"}
+
+        from codebase_intel.intent.verifier import IntentVerifier
+
+        config = state["config"]
+        verifier = IntentVerifier(config.project_root)
+
+        intent_id = args.get("intent_id")
+
+        if intent_id:
+            # Verify a specific intent
+            intent = intent_store.get(intent_id)
+            if not intent:
+                return {"error": f"Intent '{intent_id}' not found"}
+
+            report = await verifier.verify(intent)
+
+            # Update stored criteria with verification results
+            updated_criteria = []
+            for r in report.results:
+                updated_criteria.append(r.criterion.model_copy(update={
+                    "verified": r.passed,
+                    "failure_reason": r.failure_reason,
+                }))
+            intent_store.update_criteria(intent_id, updated_criteria)
+            intent_store.update_status(intent_id, report.status)
+
+            result = report.to_dict()
+            result["context"] = report.to_context_string()
+            return result
+
+        else:
+            # Verify all active intents
+            active = intent_store.get_active()
+            if not active:
+                return {"message": "No active intents to verify."}
+
+            results = []
+            for intent in active:
+                report = await verifier.verify(intent)
+
+                updated_criteria = []
+                for r in report.results:
+                    updated_criteria.append(r.criterion.model_copy(update={
+                        "verified": r.passed,
+                        "failure_reason": r.failure_reason,
+                    }))
+                intent_store.update_criteria(intent.id, updated_criteria)
+                intent_store.update_status(intent.id, report.status)
+
+                results.append(report.to_dict())
+
+            all_verified = all(r["status"] == "verified" for r in results)
+
+            return {
+                "total_intents": len(results),
+                "all_verified": all_verified,
+                "results": results,
+                "summary": (
+                    "All intents verified! Safe to mark as done."
+                    if all_verified
+                    else f"{sum(1 for r in results if r['status'] != 'verified')}/{len(results)} intents have unmet criteria."
+                ),
+            }
+
+    async def _handle_list_intents(
+        state: dict[str, Any], args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """List all tracked intents."""
+        intent_store = state.get("intent_store")
+        if not intent_store:
+            return {"error": "Intent tracking not available"}
+
+        all_intents = intent_store.load_all()
+        status_filter = args.get("status_filter", "all")
+
+        if status_filter != "all":
+            from codebase_intel.intent.models import IntentStatus
+            all_intents = [i for i in all_intents if i.status == IntentStatus(status_filter)]
+
+        return {
+            "total": len(all_intents),
+            "intents": [
+                {
+                    "id": i.id,
+                    "title": i.title,
+                    "status": i.status.value,
+                    "progress": f"{i.criteria_met}/{i.criteria_total}",
+                    "completion_pct": round(i.completion_pct),
+                    "gaps": [c.description for c in i.gaps],
+                }
+                for i in all_intents
+            ],
+        }
 
     return server
 

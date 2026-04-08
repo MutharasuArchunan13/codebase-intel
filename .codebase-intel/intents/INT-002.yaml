@@ -1,0 +1,35 @@
+id: INT-002
+title: Feedback loop must capture acceptance/rejection via MCP
+description: Agents must be able to report whether their output was accepted or rejected,
+  and the system must learn from this.
+status: verified
+priority: 1
+criteria:
+- description: Feedback tracker module exists
+  criterion_type: file_exists
+  check_value: src/codebase_intel/analytics/feedback.py
+  verified: true
+- description: MCP server has record_feedback tool
+  criterion_type: mcp_tool_exists
+  check_value: record_feedback
+  verified: true
+- description: MCP server has get_efficiency_report tool
+  criterion_type: mcp_tool_exists
+  check_value: get_efficiency_report
+  verified: true
+- description: MCP server initializes feedback tracker
+  criterion_type: file_contains
+  check_value: src/codebase_intel/mcp/server.py::FeedbackTracker
+  verified: true
+- description: Feedback handler maps rejection reasons to suggestions
+  criterion_type: file_contains
+  check_value: src/codebase_intel/analytics/feedback.py::_suggestion_for_reason
+  verified: true
+created_at: '2026-04-08T12:51:28.428541Z'
+updated_at: '2026-04-08T12:51:28.532925Z'
+verified_at: '2026-04-08T12:51:28.532935Z'
+session_id: null
+tags:
+- core
+- feedback
+- mcp

@@ -1,0 +1,39 @@
+id: INT-001
+title: Live efficiency tracking must work end-to-end via MCP
+description: Every get_context MCP call must record analytics, and the dashboard must
+  show real data from actual MCP usage.
+status: verified
+priority: 1
+criteria:
+- description: Analytics tracker module exists
+  criterion_type: file_exists
+  check_value: src/codebase_intel/analytics/tracker.py
+  verified: true
+- description: MCP server initializes analytics tracker
+  criterion_type: file_contains
+  check_value: src/codebase_intel/mcp/server.py::AnalyticsTracker
+  verified: true
+- description: Assembler accepts analytics_tracker parameter
+  criterion_type: file_contains
+  check_value: src/codebase_intel/orchestrator/assembler.py::analytics_tracker
+  verified: true
+- description: MCP server passes analytics to assembler
+  criterion_type: file_contains
+  check_value: src/codebase_intel/mcp/server.py::analytics_tracker=state
+  verified: true
+- description: Dashboard CLI command exists
+  criterion_type: grep_match
+  check_value: def dashboard::src/codebase_intel/cli/main.py
+  verified: true
+- description: Benchmark CLI command exists
+  criterion_type: grep_match
+  check_value: def benchmark::src/codebase_intel/cli/main.py
+  verified: true
+created_at: '2026-04-08T12:51:28.427512Z'
+updated_at: '2026-04-08T12:51:28.432214Z'
+verified_at: '2026-04-08T12:51:28.432215Z'
+session_id: null
+tags:
+- core
+- analytics
+- mcp
