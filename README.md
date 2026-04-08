@@ -1,0 +1,315 @@
+<h1 align="center">codebase-intel</h1>
+
+<p align="center">
+  <strong>Your AI agent writes code. But does it know <em>why</em> your code exists?</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/MutharasuArchunan13/codebase-intel/stargazers"><img src="https://img.shields.io/github/stars/MutharasuArchunan13/codebase-intel?style=flat-square" alt="Stars"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square" alt="MIT"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg?style=flat-square" alt="Python 3.11+"></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-compatible-purple.svg?style=flat-square" alt="MCP"></a>
+  <a href="#19-languages"><img src="https://img.shields.io/badge/languages-19-orange.svg?style=flat-square" alt="19 Languages"></a>
+</p>
+
+---
+
+AI coding agents can autocomplete, refactor, and generate code. But they still fail at the things that matter most in production:
+
+- They don't know your team **decided** to use token bucket over sliding window — and why
+- They don't know the compliance team **requires** rate limit headers on every response
+- They don't know that changing `config.py` will **break** billing and analytics
+- They generate code that **looks right** but violates your project's architectural patterns
+
+**codebase-intel** fixes this. It's the context layer that sits between your codebase and any AI agent — providing not just *what* code exists, but *why* it exists, *what rules* it must follow, and *what breaks* if you change it.
+
+---
+
+## Before vs After
+
+```
+WITHOUT codebase-intel                    WITH codebase-intel
+─────────────────────                     ───────────────────
+
+Agent reads: every file in the dir        Agent reads: only what matters
+Tokens used: 16,063                       Tokens used: 5,955
+Knows why code exists: No                 Knows why: Yes (13 decisions)
+Quality guardrails: None                  Guardrails: 4 contracts enforced
+Drift awareness: None                     Drift: stale context detected
+Impact analysis: None                     Impact: knows what else breaks
+
+Result: faster but fragile                Result: faster AND correct
+```
+
+### Real benchmarks on production codebases
+
+| Project | Files | Naive Tokens | codebase-intel | Reduction | Decisions | Contracts |
+|---|---:|---:|---:|---:|---:|---:|
+| **FastAPI monolith** (auth + frontend) | 359 | 16,063 | 5,955 | **63%** | 13 | 4 |
+| **Microservice A** (AI processing) | 358 | 14,611 | 5,955 | **59%** | 0 | 7 |
+| **Microservice B** (document generation) | 87 | 2,461 | 1,275 | **48%** | 0 | 6 |
+| **Microservice C** (user management) | 153 | 5,904 | 1,476 | **75%** | 0 | 4 |
+
+> Numbers from `codebase-intel benchmark` on real production repos. The token reduction comes from targeted graph traversal. The decisions and contracts are what no other tool provides.
+
+---
+
+## What makes this different
+
+There are great tools for code graphs (code-review-graph is excellent — 6K+ stars). **We don't compete with them.** We solve what they don't:
+
+| Capability | Graph-only tools | codebase-intel |
+|---|---|---|
+| Code graph + dependencies | Yes | Yes (19 languages) |
+| **Decision Journal** — *why* code is the way it is | No | **Yes** |
+| **Quality Contracts** — rules AI must follow | No | **Yes** |
+| **AI Anti-pattern Detection** — catches hallucinated imports, over-abstraction | No | **Yes** |
+| **Drift Detection** — stale context, context rot alerts | No | **Yes** |
+| **Token Budgeting** — fits context to any agent's window | No | **Yes** |
+| **Live Analytics** — prove efficiency over time | No | **Yes** |
+
+### The missing layer
+
+```
+What exists today:          What codebase-intel adds:
+
+Code → Graph → Agent        Code → Graph ──────────────────→ Agent
+                                     ↓                         ↑
+                              Decision Journal ──→ WHY ────────┤
+                              Quality Contracts → RULES ───────┤
+                              Drift Detector ──→ WARNINGS ─────┘
+                              
+                              "Here are the 3 files that matter,
+                               the decision your team made 6 months ago,
+                               and the 2 rules you must not violate."
+```
+
+---
+
+## Quick Start
+
+```bash
+pip install codebase-intel
+
+# Initialize on your project
+cd your-project
+codebase-intel init
+
+# See what it found
+codebase-intel status
+
+# Mine decisions from git history
+codebase-intel mine --save
+
+# Run benchmarks (see the before/after)
+codebase-intel benchmark
+
+# View live dashboard
+codebase-intel dashboard
+```
+
+### Connect to Claude Code
+
+```json
+{
+  "mcpServers": {
+    "codebase-intel": {
+      "command": "codebase-intel",
+      "args": ["serve", "/path/to/your/project"]
+    }
+  }
+}
+```
+
+Now your agent automatically gets relevant context, decisions, and contracts before writing code.
+
+---
+
+## The Three Pillars
+
+### 1. Decision Journal — "Why does this code exist?"
+
+Every team makes hundreds of decisions that never get documented. *Why* did you choose Postgres over Mongo? *Why* is auth middleware structured that way? *Why* was the sliding window approach rejected?
+
+codebase-intel captures these from git history automatically and links them to code:
+
+```yaml
+# .codebase-intel/decisions/DEC-042.yaml
+id: DEC-042
+title: "Use token bucket for rate limiting"
+status: active
+context: "Payment endpoint was getting hammered during flash sales"
+decision: "Token bucket algorithm with per-user buckets, 100 req/min"
+alternatives:
+  - name: sliding_window
+    rejection_reason: "Memory overhead too high at scale"
+constraints:
+  - description: "Must not add >2ms p99 latency"
+    source: sla
+    is_hard: true
+code_anchors:
+  - "src/middleware/rate_limiter.py:15-82"
+```
+
+**Without this**: your agent proposes sliding window (the exact approach you rejected 6 months ago).
+**With this**: your agent sees the decision, follows it, and respects the SLA constraint.
+
+### 2. Quality Contracts — "What rules must AI follow?"
+
+Linters check syntax. Contracts enforce **your project's patterns**:
+
+```yaml
+# .codebase-intel/contracts/api-rules.yaml
+rules:
+  - id: no-raw-sql
+    name: No raw SQL in API layer
+    severity: error
+    pattern: "execute\\(.*SELECT|INSERT|UPDATE"
+    fix_suggestion: "Use the repository pattern"
+
+  - id: async-everywhere
+    name: All I/O must be async
+    severity: error
+    pattern: "requests\\.(get|post)"
+    fix_suggestion: "Use httpx.AsyncClient"
+```
+
+**Built-in AI guardrails** catch the patterns AI agents mess up most:
+- Hallucinated imports (modules that don't exist)
+- Over-abstraction (base classes with one subclass)
+- Unnecessary error handling for impossible conditions
+- Comments that restate code instead of explaining why
+- Features that weren't requested (YAGNI violations)
+
+### 3. Drift Detection — "Is our context still valid?"
+
+Context rots. Decisions get outdated. Code anchors point to deleted files. codebase-intel detects this:
+
+```bash
+$ codebase-intel drift
+
+╭──────────────── Drift Report ────────────────╮
+│ Overall: MEDIUM                               │
+│ 3 items need attention                        │
+╰───────────────────────────────────────────────╯
+
+- [MEDIUM] Decision DEC-012 anchored to deleted file
+- [MEDIUM] Decision DEC-008 is past its review date
+- [LOW] 2 files changed since last graph index
+```
+
+---
+
+## 19 Languages
+
+Full tree-sitter parsing via [tree-sitter-language-pack](https://github.com/nicolo-ribaudo/tree-sitter-language-pack):
+
+| Category | Languages |
+|---|---|
+| **Web** | JavaScript, TypeScript, TSX |
+| **Backend** | Python, Java, Go, Ruby, PHP, Elixir |
+| **Systems** | Rust, C, C++ |
+| **Mobile** | Swift, Kotlin, Dart |
+| **Other** | C#, Scala, Lua, Haskell |
+
+---
+
+## CLI Commands
+
+```bash
+codebase-intel init [path]              # Initialize — build graph, create configs
+codebase-intel analyze [--incremental]  # Rebuild or update the code graph
+codebase-intel mine [--save]            # Mine git history for decision candidates
+codebase-intel drift                    # Run drift detection
+codebase-intel benchmark                # Measure token efficiency (before/after)
+codebase-intel dashboard                # Live efficiency tracking over time
+codebase-intel serve                    # Start MCP server
+codebase-intel status                   # Component health check
+```
+
+## MCP Tools (7 tools)
+
+| Tool | What it does |
+|---|---|
+| `get_context` | **The main tool.** Assembles relevant files + decisions + contracts within a token budget. |
+| `query_graph` | Query dependencies, dependents, or run impact analysis. |
+| `get_decisions` | Get architectural decisions relevant to specific files. |
+| `get_contracts` | Get quality contracts for files you're editing. |
+| `check_drift` | Verify context freshness before trusting old decisions. |
+| `impact_analysis` | "What breaks if I change this file?" |
+| `get_status` | Health check — graph stats, decision count, contract count. |
+
+---
+
+## Community Contract Packs
+
+Pre-built quality rules for popular frameworks:
+
+| Pack | Rules | Covers |
+|---|---|---|
+| **fastapi.yaml** | 10 | Layered architecture, Pydantic schemas, async, Depends(), secrets |
+| **react-typescript.yaml** | 11 | Functional components, no `any`, custom hooks, lazy loading |
+| **nodejs-express.yaml** | 12 | Error handling, helmet, rate limiting, structured logging |
+
+```bash
+cp community-contracts/fastapi.yaml .codebase-intel/contracts/
+```
+
+---
+
+## Architecture
+
+```
+AI Agent (any) ──→ MCP Server (7 tools)
+                        │
+                  Context Orchestrator
+                  (token budgeting, priority, conflicts)
+                   ╱          │          ╲
+          Code Graph    Decision     Quality
+          (19 langs)    Journal      Contracts
+          SQLite+WAL    YAML files   YAML+builtins
+                   ╲          │          ╱
+                    Drift Detector
+                    (staleness, rot, orphans)
+                          │
+                    Analytics Tracker
+                    (live efficiency metrics)
+```
+
+---
+
+## The Philosophy
+
+**We don't make AI agents smarter. We make them informed.**
+
+An agent with 1M tokens of context is like a developer with access to every file in the company — overwhelming and unfocused. An agent with codebase-intel is like a developer who just had a 5-minute conversation with the senior engineer: *"Here's what you need to know, here's why we did it this way, and here are the three things you absolutely cannot break."*
+
+**We don't compete with graph tools. We complete them.**
+
+Code graphs answer "what depends on what." That's necessary but not sufficient. codebase-intel answers the harder questions: *Why was this decision made? What constraints apply? What will the compliance team flag? What did we already try and reject?*
+
+**We don't hide the truth. We prove it.**
+
+Run `codebase-intel benchmark` on your project. See the numbers. Run `codebase-intel dashboard` over time. Watch the improvement. Every claim is backed by reproducible, project-specific data.
+
+---
+
+## Contributing
+
+Areas with the most impact:
+
+1. **Contract packs** — Share quality rules for your framework
+2. **Language extraction** — Improve parsing for specific languages
+3. **Decision mining** — Better git history analysis
+4. **Benchmarks** — Run against your repos, share results
+
+```bash
+git clone https://github.com/MutharasuArchunan13/codebase-intel.git
+cd codebase-intel
+pip install -e ".[dev]"
+pytest
+```
+
+## License
+
+MIT

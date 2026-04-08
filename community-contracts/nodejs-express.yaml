@@ -1,0 +1,161 @@
+id: nodejs-express
+name: Node.js + Express Best Practices
+description: >
+  Quality rules for Node.js/Express projects: middleware patterns,
+  error handling, security, async discipline, and project structure.
+version: "1.0.0"
+priority: 300
+author: codebase-intel
+tags: [nodejs, express, javascript, typescript, backend]
+
+scope:
+  include_patterns: ["src/**", "app/**", "routes/**", "middleware/**"]
+  exclude_patterns: ["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "node_modules/**"]
+  languages: ["javascript", "typescript"]
+
+rules:
+  # --- Architecture ---
+  - id: router-controller-service
+    name: Separate Router → Controller → Service layers
+    description: >
+      Express routes should delegate to controller functions, which call
+      service methods. Don't put business logic in route files or directly
+      access the database from controllers.
+    kind: architectural
+    severity: warning
+    fix_suggestion: >
+      Route: `router.get('/users/:id', userController.getById)`
+      Controller: validates input, calls service, formats response.
+      Service: business logic, calls repository for data access.
+
+  - id: no-db-in-routes
+    name: No database access in route handlers
+    description: >
+      Route handlers should not import or use database clients, ORMs,
+      or raw SQL. All data access goes through a service or repository layer.
+    kind: pattern
+    severity: error
+    pattern: "(mongoose\\.|prisma\\.|knex\\(|sequelize\\.|pool\\.query)"
+    fix_suggestion: >
+      Move to a service: `const user = await userService.findById(id);`
+
+  # --- Async/Error Handling ---
+  - id: async-error-wrapper
+    name: Wrap async route handlers
+    description: >
+      Express doesn't catch errors from async route handlers automatically.
+      Unhandled rejections crash the process. Wrap all async handlers or
+      use express-async-errors.
+    kind: pattern
+    severity: error
+    pattern: "router\\.(get|post|put|delete|patch)\\([^,]+,\\s*async"
+    fix_suggestion: >
+      Use a wrapper: `router.get('/path', asyncHandler(async (req, res) => { ... }))`
+      Or install express-async-errors at app startup.
+
+  - id: centralized-error-handler
+    name: Use centralized error handling middleware
+    description: >
+      Don't catch and respond to errors in every route. Use a centralized
+      error handling middleware (4-argument function) registered last.
+    kind: architectural
+    severity: warning
+    pattern: "catch\\s*\\(\\w+\\)\\s*\\{[^}]*res\\.status\\(500\\)"
+    fix_suggestion: >
+      Throw custom errors (NotFoundError, ValidationError) and handle them
+      in a single `(err, req, res, next) => { ... }` middleware.
+
+  - id: no-unhandled-promises
+    name: Always handle promise rejections
+    description: >
+      Unhandled promise rejections terminate the Node.js process in
+      newer versions. Always .catch() or use try/catch with await.
+    kind: pattern
+    severity: error
+    pattern: "\\.then\\([^)]+\\)\\s*$"
+    fix_suggestion: >
+      Add .catch(): `promise.then(handle).catch(errorHandler)`
+      Or use async/await with try/catch.
+
+  # --- Security ---
+  - id: helmet-middleware
+    name: Use helmet for security headers
+    description: >
+      helmet sets security-related HTTP headers (CSP, X-Frame-Options, etc.).
+      It should be one of the first middleware in the chain.
+    kind: pattern
+    severity: warning
+    anti_pattern: "helmet\\("
+    fix_suggestion: >
+      `import helmet from 'helmet'; app.use(helmet());`
+
+  - id: rate-limiting
+    name: Apply rate limiting to API endpoints
+    description: >
+      Without rate limiting, APIs are vulnerable to brute force attacks
+      and abuse. Apply rate limiting middleware to all public endpoints.
+    kind: architectural
+    severity: warning
+    fix_suggestion: >
+      Use express-rate-limit: `app.use('/api', rateLimit({ windowMs: 15*60*1000, max: 100 }))`
+
+  - id: no-eval
+    name: No eval() or Function() constructor
+    description: >
+      eval() and new Function() execute arbitrary code and are a
+      major security vulnerability (code injection). Never use them.
+    kind: pattern
+    severity: error
+    pattern: "\\beval\\(|new Function\\("
+    fix_suggestion: "Rewrite without eval. Use JSON.parse() for data, templates for strings."
+
+  - id: input-validation
+    name: Validate all request input
+    description: >
+      Never trust req.body, req.params, or req.query. Use a validation
+      library (Zod, Joi, express-validator) to validate and sanitize
+      all input at the route level.
+    kind: architectural
+    severity: error
+    fix_suggestion: >
+      Use Zod: `const schema = z.object({ email: z.string().email() });`
+      Validate: `const data = schema.parse(req.body);`
+
+  # --- Environment ---
+  - id: no-hardcoded-config
+    name: No hardcoded configuration values
+    description: >
+      Port numbers, database URLs, API keys, and feature flags must
+      come from environment variables, not source code.
+    kind: pattern
+    severity: error
+    pattern: "listen\\(\\d{4}\\)|localhost:\\d{4}|127\\.0\\.0\\.1:\\d{4}"
+    fix_suggestion: >
+      Use: `const port = process.env.PORT || 3000;`
+      Load config from .env via dotenv or a config module.
+
+  # --- Logging ---
+  - id: structured-logging
+    name: Use structured logging, not console.log
+    description: >
+      console.log is not appropriate for production. Use a structured
+      logger (winston, pino) with log levels, timestamps, and
+      request context (correlation ID).
+    kind: pattern
+    severity: warning
+    pattern: "console\\.(log|error|warn|info)\\("
+    fix_suggestion: >
+      Use pino: `import pino from 'pino'; const logger = pino();`
+      `logger.info({ userId, action }, 'User logged in');`
+
+  # --- Performance ---
+  - id: no-sync-fs
+    name: No synchronous filesystem operations
+    description: >
+      fs.readFileSync, fs.writeFileSync, and similar blocking calls
+      block the event loop. Use async variants (fs.promises) instead.
+    kind: pattern
+    severity: error
+    pattern: "\\bfs\\.(read|write|stat|unlink|mkdir|rmdir|access|exists)Sync\\b"
+    fix_suggestion: >
+      Use `fs.promises.readFile()` or `fs/promises` module with await.

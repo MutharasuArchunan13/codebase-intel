@@ -1,0 +1,160 @@
+id: react-typescript
+name: React + TypeScript Best Practices
+description: >
+  Quality rules for React/TypeScript projects: component patterns,
+  hook discipline, type safety, and performance considerations.
+version: "1.0.0"
+priority: 300
+author: codebase-intel
+tags: [react, typescript, frontend]
+
+scope:
+  include_patterns: ["src/**"]
+  exclude_patterns: ["**/*.test.*", "**/*.spec.*", "**/__tests__/**"]
+  languages: ["typescript", "tsx"]
+
+rules:
+  # --- Components ---
+  - id: functional-only
+    name: Functional components only
+    description: >
+      Class components are legacy. Use functional components with hooks
+      for all new code. They're simpler, more composable, and better
+      supported by React's concurrent features.
+    kind: pattern
+    severity: warning
+    pattern: "class\\s+\\w+\\s+extends\\s+(React\\.)?Component"
+    fix_suggestion: >
+      Convert to a functional component with hooks.
+      `class Foo extends Component` → `function Foo() { ... }`
+
+  - id: no-any
+    name: No 'any' type annotations
+    description: >
+      Using 'any' defeats TypeScript's type system. It propagates through
+      the codebase and masks bugs. Use 'unknown' for truly unknown types,
+      or define proper interfaces.
+    kind: pattern
+    severity: error
+    pattern: ":\\s*any\\b|<any>|as any"
+    fix_suggestion: >
+      Define an interface for the data shape. Use 'unknown' if truly
+      unknown, then narrow with type guards.
+
+  - id: define-prop-types
+    name: Define Props interfaces for all components
+    description: >
+      Every component that accepts props must have a typed Props interface.
+      Inline types are acceptable for simple components but named interfaces
+      are preferred for reusability and documentation.
+    kind: pattern
+    severity: warning
+    anti_pattern: "interface\\s+\\w+Props|type\\s+\\w+Props"
+    fix_suggestion: >
+      Define: `interface UserCardProps { name: string; email: string; }`
+      Then: `function UserCard({ name, email }: UserCardProps) { ... }`
+
+  # --- Hooks ---
+  - id: custom-hooks-for-logic
+    name: Extract logic into custom hooks
+    description: >
+      Components with more than 2-3 useState/useEffect calls should extract
+      logic into custom hooks. This improves testability and reuse.
+      A hook should represent a single responsibility.
+    kind: pattern
+    severity: warning
+    fix_suggestion: >
+      Extract into: `function useUserData(id: string) { ... }`
+      Use in component: `const { user, loading } = useUserData(id);`
+
+  - id: no-useeffect-fetch
+    name: Don't use useEffect for data fetching
+    description: >
+      Raw useEffect for fetching leads to race conditions, missing cleanup,
+      and no caching. Use a data fetching library (React Query/TanStack Query,
+      SWR, or RTK Query) instead.
+    kind: pattern
+    severity: warning
+    pattern: "useEffect\\([^)]*fetch\\(|useEffect\\([^)]*axios"
+    fix_suggestion: >
+      Use `useQuery` from @tanstack/react-query or `useSWR` from swr.
+      They handle caching, deduplication, and race conditions.
+
+  - id: deps-array-exhaustive
+    name: Exhaustive useEffect dependency arrays
+    description: >
+      Missing dependencies in useEffect cause stale closures and bugs.
+      Include all referenced variables in the dependency array, or
+      restructure to avoid the dependency.
+    kind: pattern
+    severity: error
+    pattern: "// eslint-disable.*exhaustive-deps"
+    fix_suggestion: >
+      Fix the dependency array instead of disabling the lint rule.
+      Use useCallback/useMemo to stabilize references if needed.
+
+  # --- State Management ---
+  - id: no-prop-drilling
+    name: Avoid deep prop drilling
+    description: >
+      Passing props through more than 2 intermediate components that
+      don't use them creates fragile coupling. Use Context, a state
+      management library, or component composition instead.
+    kind: architectural
+    severity: warning
+    fix_suggestion: >
+      Options: React Context for theme/auth/locale, Zustand/Jotai for
+      global state, component composition (render props, children) for
+      layout concerns.
+
+  # --- Performance ---
+  - id: no-inline-objects-jsx
+    name: No inline object/array creation in JSX props
+    description: >
+      Creating objects/arrays inline in JSX (`style={{...}}`, `options={[...]}`)
+      creates a new reference every render, breaking React.memo and causing
+      unnecessary re-renders. Define outside or use useMemo.
+    kind: pattern
+    severity: warning
+    pattern: "<\\w+[^>]*\\{\\{[^}]+\\}\\}[^>]*>"
+    fix_suggestion: >
+      Extract to a constant or wrap with useMemo:
+      `const style = useMemo(() => ({ color: 'red' }), []);`
+
+  - id: lazy-routes
+    name: Lazy-load route components
+    description: >
+      Import route-level components with React.lazy() to enable code splitting.
+      This reduces initial bundle size and improves load time.
+    kind: pattern
+    severity: info
+    fix_suggestion: >
+      `const Dashboard = lazy(() => import('./pages/Dashboard'));`
+      Wrap with `<Suspense fallback={<Loading />}>`.
+
+  # --- Error Handling ---
+  - id: error-boundaries
+    name: Use error boundaries for route-level components
+    description: >
+      Unhandled errors in a component tree crash the entire app.
+      Wrap route-level components in error boundaries to catch and
+      display fallback UI gracefully.
+    kind: architectural
+    severity: warning
+    fix_suggestion: >
+      Create an ErrorBoundary component or use react-error-boundary package.
+      Wrap each route: `<ErrorBoundary fallback={<ErrorPage />}><Page /></ErrorBoundary>`
+
+  # --- Testing ---
+  - id: test-behavior-not-implementation
+    name: Test behavior, not implementation details
+    description: >
+      Don't test internal state, hook internals, or component structure.
+      Test what the user sees and does: rendered text, click handlers,
+      form submissions. Use @testing-library/react.
+    kind: pattern
+    severity: info
+    pattern: "\\.(state|instance)\\(\\)|wrapper\\.find\\("
+    fix_suggestion: >
+      Use screen.getByRole(), screen.getByText(), userEvent.click().
+      Query by accessibility roles, not CSS selectors or component names.

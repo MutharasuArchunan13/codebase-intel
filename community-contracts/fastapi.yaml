@@ -1,0 +1,143 @@
+id: fastapi-conventions
+name: FastAPI Best Practices
+description: >
+  Quality rules for FastAPI projects: layered architecture enforcement,
+  Pydantic schema discipline, async patterns, and dependency injection.
+version: "1.0.0"
+priority: 300
+author: codebase-intel
+tags: [python, fastapi, api, backend]
+
+scope:
+  include_patterns: ["src/**", "app/**"]
+  exclude_patterns: ["**/tests/**", "**/*_test.py", "**/conftest.py"]
+  languages: ["python"]
+
+rules:
+  # --- Architecture ---
+  - id: layered-architecture
+    name: Enforce Router → Service → Repository layers
+    description: >
+      Routers must not access the database directly. Business logic belongs
+      in services. Data access belongs in repositories. This separation
+      makes testing easier and prevents coupling.
+    kind: architectural
+    severity: error
+    pattern: "(Session|AsyncSession|engine|sessionmaker|create_engine)"
+    fix_suggestion: >
+      Move database access to a repository class in src/repositories/.
+      Inject it via FastAPI Depends().
+
+  - id: no-business-logic-in-routers
+    name: No business logic in route handlers
+    description: >
+      Route handlers should validate input, call a service, and format output.
+      Complex conditionals, loops over data, or multi-step operations
+      belong in the service layer.
+    kind: architectural
+    severity: warning
+    fix_suggestion: >
+      Extract logic into a service method. The router should be 5-15 lines.
+
+  # --- Pydantic ---
+  - id: separate-schemas
+    name: Separate Create/Update/Response schemas
+    description: >
+      Never expose SQLAlchemy models directly in API responses. Use separate
+      Pydantic schemas for creation (input), update (partial input), and
+      response (output). This prevents leaking internal fields and allows
+      independent evolution.
+    kind: pattern
+    severity: error
+    pattern: "\\bresponse_model\\s*=\\s*[A-Z]\\w*(Model|Table|ORM)"
+    fix_suggestion: >
+      Create a response schema: UserResponse, not UserModel.
+      Place in src/schemas/ or src/api/schemas/.
+
+  - id: no-orm-in-response
+    name: No ORM models in response_model
+    description: >
+      Using SQLAlchemy models as response_model causes lazy-loading issues,
+      exposes internal fields, and breaks when the schema changes.
+    kind: pattern
+    severity: error
+    pattern: "from_attributes\\s*=\\s*True"
+    fix_suggestion: >
+      Use explicit Pydantic schemas with selected fields instead of
+      orm_mode/from_attributes.
+
+  # --- Async ---
+  - id: async-everywhere
+    name: Use async for all I/O operations
+    description: >
+      FastAPI runs on an async event loop. Blocking I/O (sync database calls,
+      sync HTTP requests, file I/O without aiofiles) blocks the entire
+      server. Always use async variants.
+    kind: pattern
+    severity: error
+    pattern: "\\brequests\\.(get|post|put|delete|patch)\\("
+    fix_suggestion: >
+      Use httpx.AsyncClient instead of requests. For database: use
+      async SQLAlchemy sessions. For files: use aiofiles.
+
+  - id: no-sync-sleep
+    name: No time.sleep() in async code
+    description: >
+      time.sleep() blocks the event loop. Use asyncio.sleep() instead.
+    kind: pattern
+    severity: error
+    pattern: "\\btime\\.sleep\\("
+    fix_suggestion: "Use `await asyncio.sleep()` instead."
+
+  # --- Dependency Injection ---
+  - id: use-depends
+    name: Use Depends() for all service/repo dependencies
+    description: >
+      FastAPI's dependency injection system (Depends) enables testing,
+      swapping implementations, and request-scoped lifecycle. Instantiating
+      services directly in route handlers defeats this.
+    kind: pattern
+    severity: warning
+    pattern: "\\b\\w+Service\\(\\)"
+    fix_suggestion: >
+      Define a dependency: `def get_user_service() -> UserService: ...`
+      Then use: `service: UserService = Depends(get_user_service)`
+
+  # --- Error Handling ---
+  - id: custom-exceptions
+    name: Use custom exception classes
+    description: >
+      Raising HTTPException directly with status codes scatters HTTP
+      concerns through the codebase. Use custom exception classes and
+      a global exception handler to centralize error formatting.
+    kind: pattern
+    severity: warning
+    pattern: "raise HTTPException\\(status_code=\\d+"
+    fix_suggestion: >
+      Define custom exceptions (NotFoundError, ForbiddenError) and register
+      global exception handlers that convert them to HTTP responses.
+
+  # --- Configuration ---
+  - id: pydantic-settings
+    name: Use Pydantic BaseSettings for configuration
+    description: >
+      Don't use os.environ.get() directly. Pydantic BaseSettings provides
+      type validation, defaults, and .env file support.
+    kind: pattern
+    severity: warning
+    pattern: "os\\.environ\\.(get|__getitem__)"
+    fix_suggestion: >
+      Create a Settings class inheriting from pydantic_settings.BaseSettings.
+      Access config via Depends(get_settings).
+
+  # --- Security ---
+  - id: no-hardcoded-secrets
+    name: No hardcoded secrets or API keys
+    description: >
+      Secrets, API keys, database passwords, and JWT secrets must never
+      appear in source code. Use environment variables or a secret manager.
+    kind: pattern
+    severity: error
+    pattern: "(password|secret|api_key|token)\\s*=\\s*[\"'][^\"']{8,}[\"']"
+    fix_suggestion: >
+      Move to environment variables and load via Pydantic BaseSettings.

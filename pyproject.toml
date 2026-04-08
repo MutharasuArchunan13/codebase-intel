@@ -1,0 +1,119 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codebase-intel"
+version = "0.1.0"
+description = "Your AI agent writes code — but does it know WHY your code exists? Decision provenance, quality contracts, and AI anti-pattern detection for coding agents."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Mutharasu" }]
+keywords = [
+    "ai", "ai-coding", "ai-agent", "coding-agents",
+    "claude-code", "copilot", "cursor", "mcp", "mcp-server",
+    "code-review", "code-quality", "code-intelligence",
+    "tree-sitter", "code-graph", "knowledge-graph",
+    "architecture-decision-records", "adr",
+    "developer-tools", "context", "devtools",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.2,<3",
+    "tree-sitter>=0.23,<1",
+    "tree-sitter-language-pack>=0.3,<1",
+    "typer>=0.12,<1",
+    "rich>=13.7,<14",
+    "mcp>=1.0,<2",
+    "gitpython>=3.1,<4",
+    "aiosqlite>=0.20,<1",
+    "tiktoken>=0.7,<1",
+    "pyyaml>=6.0,<7",
+    "xxhash>=3.4,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "mypy>=1.9",
+    "pre-commit>=3.7",
+]
+eval = [
+    "matplotlib>=3.7",
+]
+
+[project.scripts]
+codebase-intel = "codebase_intel.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/mutharasu/codebase-intel"
+Repository = "https://github.com/mutharasu/codebase-intel"
+Issues = "https://github.com/mutharasu/codebase-intel/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codebase_intel"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # flake8-bugbear
+    "SIM",       # flake8-simplify
+    "TCH",       # flake8-type-checking
+    "RUF",       # ruff-specific
+    "ASYNC",     # flake8-async
+    "S",         # bandit (security)
+]
+ignore = ["S101"]  # allow assert in tests
+
+[tool.ruff.lint.isort]
+known-first-party = ["codebase_intel"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--cov=codebase_intel --cov-report=term-missing --cov-fail-under=90"
+
+[tool.coverage.run]
+source = ["src/codebase_intel"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "@overload",
+]
