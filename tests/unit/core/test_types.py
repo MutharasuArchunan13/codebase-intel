@@ -86,15 +86,11 @@ class TestEdgeKind:
 class TestLanguage:
     def test_all_values_present(self) -> None:
         expected = {
-            "python",
-            "javascript",
-            "typescript",
-            "tsx",
-            "go",
-            "rust",
-            "java",
-            "ruby",
-            "unknown",
+            "python", "javascript", "typescript", "tsx",
+            "go", "rust", "java", "ruby",
+            "c", "cpp", "c_sharp", "php", "swift",
+            "kotlin", "scala", "lua", "dart",
+            "elixir", "haskell", "unknown",
         }
         assert {lang.value for lang in Language} == expected
 
