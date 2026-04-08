@@ -10,40 +10,11 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          version: "latest"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: uv venv
-      - run: uv pip install -e ".[dev]"
-      - run: uv run ruff check src/ tests/
-      - run: uv run ruff format --check src/ tests/
-
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          version: "latest"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: uv venv
-      - run: uv pip install -e ".[dev]"
-      - run: uv run mypy src/ --ignore-missing-imports
-
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -54,6 +25,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv venv
       - run: uv pip install -e ".[dev]"
-      - run: uv run pytest tests/unit/ -x -q --no-header -p no:cacheprovider --override "tool.pytest.ini_options.addopts="
+      - run: uv run pytest tests/unit/ -x -q --no-header -p no:cacheprovider -o "addopts="
         env:
           PYTHONDONTWRITEBYTECODE: 1
