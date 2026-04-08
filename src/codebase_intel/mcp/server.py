@@ -121,6 +121,26 @@ def create_server(project_root: Path | None = None) -> Server:
         except Exception:
             _state["contracts_available"] = False
 
+        # Initialize analytics tracker (live efficiency tracking)
+        try:
+            from codebase_intel.analytics.tracker import AnalyticsTracker
+
+            analytics_db = config.project_root / ".codebase-intel" / "analytics.db"
+            _state["analytics"] = AnalyticsTracker(analytics_db)
+            _state["analytics_available"] = True
+        except Exception:
+            _state["analytics_available"] = False
+
+        # Initialize feedback tracker
+        try:
+            from codebase_intel.analytics.feedback import FeedbackTracker
+
+            feedback_db = config.project_root / ".codebase-intel" / "feedback.db"
+            _state["feedback"] = FeedbackTracker(feedback_db)
+            _state["feedback_available"] = True
+        except Exception:
+            _state["feedback_available"] = False
+
         _state["initialized"] = True
         return _state
 
@@ -301,6 +321,59 @@ def create_server(project_root: Path | None = None) -> Server:
                     "properties": {},
                 },
             ),
+            Tool(
+                name="record_feedback",
+                description=(
+                    "Record whether AI-generated code was accepted, modified, or rejected. "
+                    "This powers the feedback loop — over time, the system learns which "
+                    "context patterns lead to better output."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID from a previous get_context call",
+                        },
+                        "feedback": {
+                            "type": "string",
+                            "enum": ["accepted", "modified", "rejected", "partial"],
+                            "description": "How the generated code was received",
+                        },
+                        "rejection_reason": {
+                            "type": "string",
+                            "enum": [
+                                "wrong_pattern", "missing_context", "violated_decision",
+                                "hallucinated", "over_engineered", "security_issue",
+                                "wrong_approach", "other",
+                            ],
+                            "description": "Why the code was rejected (if feedback is 'rejected')",
+                        },
+                        "details": {
+                            "type": "string",
+                            "description": "Free-text details about what went wrong or right",
+                        },
+                    },
+                    "required": ["session_id", "feedback"],
+                },
+            ),
+            Tool(
+                name="get_efficiency_report",
+                description=(
+                    "Get live efficiency metrics — token savings, acceptance rate, "
+                    "before/after comparison. Proves the value of codebase-intel over time."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "include_trend": {
+                            "type": "boolean",
+                            "description": "Include daily trend data (default: true)",
+                            "default": True,
+                        },
+                    },
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -336,6 +409,10 @@ def create_server(project_root: Path | None = None) -> Server:
                 result = await _handle_impact_analysis(state, arguments)
             elif name == "get_status":
                 result = await _handle_get_status(state, arguments)
+            elif name == "record_feedback":
+                result = await _handle_record_feedback(state, arguments)
+            elif name == "get_efficiency_report":
+                result = await _handle_efficiency_report(state, arguments)
             else:
                 result = {"error": f"Unknown tool: {name}"}
         except Exception as exc:
@@ -368,6 +445,7 @@ def create_server(project_root: Path | None = None) -> Server:
             graph_engine=state.get("graph_engine"),
             decision_store=state.get("decisions"),
             contract_registry=state.get("contracts"),
+            analytics_tracker=state.get("analytics"),
         )
 
         result = await assembler.assemble(
@@ -696,6 +774,136 @@ def create_server(project_root: Path | None = None) -> Server:
             status["builtin_contracts"] = sum(1 for c in all_contracts if c.is_builtin)
 
         return status
+
+    async def _handle_record_feedback(
+        state: dict[str, Any], args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Record feedback on AI-generated code quality."""
+        feedback_tracker = state.get("feedback")
+        if not feedback_tracker:
+            return {"error": "Feedback tracking not available"}
+
+        from codebase_intel.analytics.feedback import FeedbackType, RejectionReason
+
+        session_id = args["session_id"]
+        feedback_type = FeedbackType(args["feedback"])
+        rejection_reason = None
+        if args.get("rejection_reason"):
+            rejection_reason = RejectionReason(args["rejection_reason"])
+
+        # Start session if it doesn't exist yet
+        feedback_tracker.start_session(
+            session_id=session_id,
+            task_description=args.get("details", ""),
+            files_involved=[],
+        )
+
+        feedback_tracker.record_feedback(
+            session_id=session_id,
+            feedback_type=feedback_type,
+            rejection_reason=rejection_reason,
+            details=args.get("details"),
+        )
+
+        # Return current acceptance rate so the agent sees the impact
+        acceptance = feedback_tracker.get_acceptance_rate()
+        effectiveness = feedback_tracker.get_context_effectiveness()
+
+        response: dict[str, Any] = {
+            "recorded": True,
+            "session_id": session_id,
+            "feedback": feedback_type.value,
+            "acceptance_rate": acceptance,
+        }
+
+        if rejection_reason:
+            analysis = feedback_tracker.get_rejection_analysis()
+            response["rejection_analysis"] = analysis
+            # Show actionable suggestion
+            suggestion = feedback_tracker._suggestion_for_reason(rejection_reason.value)
+            response["improvement_suggestion"] = suggestion
+
+        if effectiveness.get("insight"):
+            response["effectiveness_insight"] = effectiveness["insight"]
+
+        return response
+
+    async def _handle_efficiency_report(
+        state: dict[str, Any], args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return live efficiency metrics — the proof layer."""
+        analytics = state.get("analytics")
+        feedback = state.get("feedback")
+
+        report: dict[str, Any] = {}
+
+        # Token efficiency from analytics
+        if analytics:
+            stats = analytics.get_lifetime_stats()
+            comparison = analytics.get_before_after_comparison()
+            report["token_efficiency"] = stats["tokens"]
+            report["context_quality"] = stats["context_quality"]
+            report["before_vs_after"] = comparison
+
+            if args.get("include_trend", True):
+                report["daily_trend"] = analytics.get_daily_trend(14)
+
+            benchmarks = analytics.get_benchmark_results()
+            if benchmarks:
+                report["benchmarks"] = [
+                    {
+                        "project": b["repo_name"],
+                        "files": b["total_files"],
+                        "reduction_pct": b["avg_token_reduction_pct"],
+                        "date": b["timestamp"][:10],
+                    }
+                    for b in benchmarks[:5]
+                ]
+        else:
+            report["token_efficiency"] = {"message": "No analytics data yet. Run `codebase-intel benchmark` to start."}
+
+        # Acceptance rate from feedback
+        if feedback:
+            report["acceptance_rate"] = feedback.get_acceptance_rate()
+            report["rejection_analysis"] = feedback.get_rejection_analysis()
+            report["context_effectiveness"] = feedback.get_context_effectiveness()
+
+            insights = feedback.get_insights(5)
+            if insights:
+                report["learning_insights"] = [
+                    {"description": i["description"], "confidence": i["confidence"]}
+                    for i in insights
+                ]
+        else:
+            report["acceptance_rate"] = {"message": "No feedback data yet. Use record_feedback after code reviews."}
+
+        # Summary headline
+        total_requests = 0
+        tokens_saved = 0
+        if analytics:
+            s = analytics.get_lifetime_stats()
+            total_requests = s["total_requests"]
+            tokens_saved = s["tokens"]["total_saved"]
+
+        acceptance_pct = 0.0
+        if feedback:
+            ar = feedback.get_acceptance_rate()
+            acceptance_pct = ar["overall"]["acceptance_rate"]
+
+        report["headline"] = {
+            "total_requests": total_requests,
+            "tokens_saved": tokens_saved,
+            "acceptance_rate_pct": acceptance_pct,
+            "message": (
+                f"codebase-intel has processed {total_requests} context requests, "
+                f"saved {tokens_saved:,} tokens, "
+                f"with {acceptance_pct:.0f}% AI output acceptance rate."
+                if total_requests > 0
+                else "No data yet. Use get_context and record_feedback to start tracking."
+            ),
+        }
+
+        return report
 
     return server
 
