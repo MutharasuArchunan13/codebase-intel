@@ -56,7 +56,11 @@ src/codebase_intel/
 ├── contracts/     # models.py, parser.py, evaluator.py, registry.py
 ├── orchestrator/  # assembler.py, budget.py, scorer.py, conflict.py
 ├── drift/         # detector.py, reporter.py
-├── mcp/           # server.py
+├── workspace/     # manager.py, registry.py — global multi-project workspace
+├── crossrepo/     # models.py, scanner.py, registry.py — cross-service deps
+├── analytics/     # tracker.py, benchmark.py, feedback.py
+├── intent/        # models.py, verifier.py, store.py
+├── mcp/           # server.py (supports --auto multi-project mode)
 └── cli/           # main.py
 ```
 

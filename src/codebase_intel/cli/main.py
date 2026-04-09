@@ -436,23 +436,44 @@ async def _detect_patterns_async(project_root: Path, save: bool) -> None:
 @app.command(name="crossrepo")
 def crossrepo(
     paths: Annotated[
-        list[Path],
-        typer.Argument(help="Paths to service repos (space-separated)"),
-    ],
+        Optional[list[Path]],
+        typer.Argument(help="Paths to service repos (space-separated). Omit with --all."),
+    ] = None,
+    all_registered: bool = typer.Option(False, "--all", "-A", help="Scan all globally registered projects"),
     impact: str = typer.Option("", "--impact", "-i", help="Service ID to check impact for"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Scan multiple repos and map cross-service dependencies."""
+    """Scan multiple repos and map cross-service dependencies.
+
+    Provide paths explicitly or use --all to scan all registered projects:
+        codebase-intel crossrepo /svc1 /svc2 /svc3
+        codebase-intel crossrepo --all
+    """
     _setup_logging(verbose)
 
     from codebase_intel.crossrepo.registry import CrossRepoRegistry
 
-    registry_dir = paths[0].resolve().parent / ".codebase-intel-crossrepo"
+    # Resolve paths: explicit args or global registry
+    if all_registered:
+        from codebase_intel.workspace.registry import GlobalRegistry
+
+        global_registry = GlobalRegistry()
+        resolved_paths = global_registry.get_all_paths()
+        if not resolved_paths:
+            console.print("[red]No projects registered.[/red] Use `codebase-intel register` first.")
+            raise typer.Exit(1)
+        console.print(f"[cyan]Scanning {len(resolved_paths)} registered project(s)...[/cyan]")
+    elif paths:
+        resolved_paths = [p.resolve() for p in paths]
+    else:
+        console.print("[red]Provide repo paths or use --all to scan registered projects.[/red]")
+        raise typer.Exit(1)
+
+    registry_dir = resolved_paths[0].parent / ".codebase-intel-crossrepo"
     registry = CrossRepoRegistry(registry_dir)
 
     # Scan all services
-    for repo_path in paths:
-        resolved = repo_path.resolve()
+    for resolved in resolved_paths:
         if not resolved.is_dir():
             console.print(f"[red]Not a directory: {resolved}[/red]")
             continue
@@ -522,15 +543,136 @@ def crossrepo(
 
 @app.command()
 def serve(
-    path: Annotated[Path, typer.Argument(help="Project root")] = Path("."),
+    path: Annotated[Optional[Path], typer.Argument(help="Project root (omit for --auto mode)")] = None,
+    auto: bool = typer.Option(False, "--auto", "-a", help="Workspace-aware mode: serve all registered projects"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Start the MCP server (stdio transport)."""
+    """Start the MCP server (stdio transport).
+
+    Single-project mode (default):
+        codebase-intel serve /path/to/project
+
+    Multi-project mode (global):
+        codebase-intel serve --auto
+
+    In --auto mode, the server routes each request to the correct project
+    based on file paths. Register projects first with `codebase-intel register`.
+    """
     _setup_logging(verbose)
-    console.print("[dim]Starting MCP server over stdio...[/dim]", err=True)
 
     from codebase_intel.mcp.server import run_server
-    asyncio.run(run_server(path.resolve()))
+
+    if auto:
+        console.print("[dim]Starting MCP server in workspace-aware mode...[/dim]", err=True)
+        asyncio.run(run_server(auto_mode=True))
+    else:
+        project_root = (path or Path(".")).resolve()
+        console.print(f"[dim]Starting MCP server for {project_root.name}...[/dim]", err=True)
+        asyncio.run(run_server(project_root))
+
+
+# -------------------------------------------------------------------
+# register / unregister / projects (global workspace)
+# -------------------------------------------------------------------
+
+
+@app.command()
+def register(
+    path: Annotated[Path, typer.Argument(help="Project root to register")] = Path("."),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Display name for the project"),
+    project_id: Optional[str] = typer.Option(None, "--id", help="Custom project ID (default: directory name)"),
+) -> None:
+    """Register a project in the global registry.
+
+    Once registered, the project is available to `codebase-intel serve --auto`
+    and `codebase-intel crossrepo scan --all`.
+
+    Examples:
+        codebase-intel register /path/to/user-service
+        codebase-intel register . --name "Payment API" --id payment-api
+    """
+    from codebase_intel.workspace.registry import GlobalRegistry
+
+    registry = GlobalRegistry()
+    resolved = path.resolve()
+
+    if not resolved.is_dir():
+        console.print(f"[red]Not a directory: {resolved}[/red]")
+        raise typer.Exit(1)
+
+    entry = registry.register(resolved, project_id=project_id, name=name)
+
+    init_status = "[green]initialized[/green]" if entry.initialized else "[yellow]not initialized[/yellow]"
+    console.print(
+        f"[green]Registered[/green] [bold]{entry.project_id}[/bold] "
+        f"→ {entry.root_path} ({init_status})"
+    )
+
+    if not entry.initialized:
+        console.print(
+            f"[dim]Run `codebase-intel init {resolved}` to build the code graph.[/dim]"
+        )
+
+
+@app.command()
+def unregister(
+    project_id: Annotated[str, typer.Argument(help="Project ID to remove")],
+) -> None:
+    """Remove a project from the global registry."""
+    from codebase_intel.workspace.registry import GlobalRegistry
+
+    registry = GlobalRegistry()
+
+    if registry.unregister(project_id):
+        console.print(f"[green]Unregistered[/green] [bold]{project_id}[/bold]")
+    else:
+        console.print(f"[red]Project '{project_id}' not found in registry[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def projects() -> None:
+    """List all globally registered projects."""
+    from codebase_intel.workspace.registry import GlobalRegistry
+
+    registry = GlobalRegistry()
+    all_projects = registry.get_all()
+
+    if not all_projects:
+        console.print("[yellow]No projects registered.[/yellow]")
+        console.print("Register with: `codebase-intel register /path/to/project`")
+        return
+
+    table = Table(title="Registered Projects")
+    table.add_column("ID", style="bold")
+    table.add_column("Name")
+    table.add_column("Path")
+    table.add_column("Status")
+    table.add_column("Initialized")
+    table.add_column("Last Accessed", style="dim")
+
+    for entry in all_projects:
+        exists = entry.is_valid
+        status = "[green]OK[/green]" if exists else "[red]MISSING[/red]"
+        init_status = "[green]Yes[/green]" if entry.initialized else "[yellow]No[/yellow]"
+        last_accessed = (
+            entry.last_accessed.strftime("%Y-%m-%d %H:%M")
+            if entry.last_accessed
+            else "—"
+        )
+
+        table.add_row(
+            entry.project_id,
+            entry.name,
+            entry.root_path,
+            status,
+            init_status,
+            last_accessed,
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]{len(all_projects)} project(s) registered. "
+                  f"Use `codebase-intel serve --auto` to serve all.[/dim]")
 
 
 # -------------------------------------------------------------------

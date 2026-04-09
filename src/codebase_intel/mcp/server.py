@@ -38,8 +38,16 @@ from codebase_intel.core.types import TokenBudget
 logger = logging.getLogger(__name__)
 
 
-def create_server(project_root: Path | None = None) -> Server:
+def create_server(
+    project_root: Path | None = None,
+    *,
+    auto_mode: bool = False,
+) -> Server:
     """Create and configure the MCP server with all tools.
+
+    Two modes:
+    - Single-project (default): serves one project at `project_root`
+    - Auto mode (--auto): serves multiple projects, routing by file paths
 
     The server exposes these tools:
     1. get_context — Main tool: assemble context for a task
@@ -51,17 +59,43 @@ def create_server(project_root: Path | None = None) -> Server:
     7. get_status — Health check and component status
     """
     server = Server("codebase-intel")
+    _auto = auto_mode
     _root = project_root or Path.cwd()
 
-    # Lazy initialization — components are created on first use
+    # Workspace manager for auto mode (multi-project)
+    _workspace: dict[str, Any] = {"manager": None}
+
+    # Single-project state (backward compat)
     _state: dict[str, Any] = {"initialized": False}
 
-    async def _ensure_initialized() -> dict[str, Any]:
+    def _get_workspace_manager() -> Any:
+        """Lazy-init the workspace manager for auto mode."""
+        if _workspace["manager"] is None:
+            from codebase_intel.workspace.manager import WorkspaceManager
+
+            _workspace["manager"] = WorkspaceManager()
+        return _workspace["manager"]
+
+    async def _ensure_initialized(
+        file_path: str | None = None,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
         """Initialize components lazily on first tool call.
+
+        In auto mode: routes to the correct project based on file_path.
+        In single mode: initializes once for _root (backward compat).
 
         Edge case: init might fail partially (graph OK, decisions dir missing).
         We track what's available and what's not, and tools degrade gracefully.
         """
+        if _auto:
+            manager = _get_workspace_manager()
+            return await manager.resolve(
+                file_path=file_path,
+                project_id=project_id,
+            )
+
+        # Single-project mode (original behavior)
         if _state["initialized"]:
             return _state
 
@@ -474,12 +508,15 @@ def create_server(project_root: Path | None = None) -> Server:
         """Route tool calls to handlers.
 
         Every handler follows the same pattern:
-        1. Ensure initialized
-        2. Validate inputs
-        3. Execute (catch exceptions → structured error response)
-        4. Return structured JSON
+        1. Extract file path hint for project routing (auto mode)
+        2. Ensure initialized (routes to correct project in auto mode)
+        3. Validate inputs
+        4. Execute (catch exceptions → structured error response)
+        5. Return structured JSON
         """
-        state = await _ensure_initialized()
+        # Extract file path hint for workspace routing
+        file_hint = _extract_file_hint(arguments)
+        state = await _ensure_initialized(file_path=file_hint)
 
         if "error" in state:
             return [TextContent(
@@ -852,7 +889,7 @@ def create_server(project_root: Path | None = None) -> Server:
                 "decisions": "available" if state.get("decisions_available") else "not_initialized",
                 "contracts": "available" if state.get("contracts_available") else "not_initialized",
             },
-            "version": "0.1.0",
+            "version": "0.2.0",
         }
 
         # Add graph stats if available
@@ -1153,11 +1190,40 @@ def create_server(project_root: Path | None = None) -> Server:
     return server
 
 
-async def run_server(project_root: Path | None = None) -> None:
+def _extract_file_hint(arguments: dict[str, Any]) -> str | None:
+    """Extract a file path from tool arguments for project routing.
+
+    Checks common argument patterns across all tools to find a file
+    path that can be used to determine which project the request is for.
+    """
+    # Direct file path arguments
+    for key in ("file_path", "file"):
+        val = arguments.get(key)
+        if isinstance(val, str) and val:
+            return val
+
+    # Array of files — take the first one
+    for key in ("files", "changed_files"):
+        val = arguments.get(key)
+        if isinstance(val, list) and val and isinstance(val[0], str):
+            return val[0]
+
+    return None
+
+
+async def run_server(
+    project_root: Path | None = None,
+    *,
+    auto_mode: bool = False,
+) -> None:
     """Run the MCP server over stdio.
 
     This is the entry point for `codebase-intel serve`.
+
+    Args:
+        project_root: Explicit project path (single-project mode).
+        auto_mode: If True, serve multiple projects using global registry.
     """
-    server = create_server(project_root)
+    server = create_server(project_root, auto_mode=auto_mode)
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())

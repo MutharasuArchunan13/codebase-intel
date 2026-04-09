@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codebase-intel"
-version = "0.1.0"
+version = "0.2.0"
 description = "Your AI agent writes code — but does it know WHY your code exists? Decision provenance, quality contracts, and AI anti-pattern detection for coding agents."
 readme = "README.md"
 license = "MIT"
